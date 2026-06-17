@@ -1,11 +1,10 @@
 // ─────────────────────────────────────────────
-// Traces: точки-следы на глобусе
+// Traces: точки-следы на глобусе (Кристальные ядра)
 // ─────────────────────────────────────────────
 import * as THREE from 'three';
-import { latLngToVector3, CATEGORIES } from './data.js';
+import { latLngToVector3 } from './data.js';
 
-// Вершинный шейдер для точек
-const traceVertexShader = `
+  const traceVertexShader = `
   attribute float aSize;
   attribute vec3 aColor;
   attribute float aOpacity;
@@ -21,48 +20,53 @@ const traceVertexShader = `
     vColor = aColor;
     vOpacity = aOpacity;
 
-    // Пульсация размера
-    float pulse = 1.0 + 0.3 * sin(uTime * 1.5 + aPhase * 6.28);
+    // Изящная пульсация
+    float pulse = 1.0 + 0.2 * sin(uTime * 2.0 + aPhase * 6.28);
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = aSize * pulse * uPixelRatio * (80.0 / -mvPosition.z);
+    // Размер attenuation (уменьшается при отдалении) - сделан значительно меньше
+    gl_PointSize = aSize * pulse * uPixelRatio * (50.0 / -mvPosition.z);
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
 
-// Фрагментный шейдер — мягкий круг со свечением
+// Фрагментный шейдер: Резкое ядро + мягкий ореол
 const traceFragmentShader = `
   varying vec3 vColor;
   varying float vOpacity;
 
   void main() {
-    float dist = length(gl_PointCoord - vec2(0.5));
-    if (dist > 0.5) discard;
+    vec2 xy = gl_PointCoord.xy - vec2(0.5);
+    float dist = length(xy);
+    if(dist > 0.5) discard;
 
-    // Мягкое затухание от центра
-    float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
-    alpha = pow(alpha, 1.5);
+    // Резкое, почти белое ядро в самом центре (как у звезды)
+    float core = exp(-dist * dist * 300.0);
+    
+    // Мягкое широкое свечение (более плотное и компактное)
+    float glow = exp(-dist * dist * 40.0) * 0.5;
+    
+    float alpha = core + glow;
+    
+    // Слегка "пересвечиваем" цвет для эффекта Bloom (HDR-like)
+    vec3 bloomColor = vColor * 1.2;
 
-    gl_FragColor = vec4(vColor, alpha * vOpacity * 0.85);
+    gl_FragColor = vec4(bloomColor, alpha * vOpacity);
   }
 `;
 
-/**
- * Создание системы точек-следов
- */
 export function createTraces(scene, traces) {
   const count = traces.length;
 
-  // Буферы
   const positions = new Float32Array(count * 3);
   const colors    = new Float32Array(count * 3);
   const sizes     = new Float32Array(count);
   const opacities = new Float32Array(count);
   const phases    = new Float32Array(count);
-  const categoryIndices = []; // для фильтрации
+  const categoryIndices = [];
 
   const tempColor = new THREE.Color();
-  const GLOBE_RADIUS = 1.01; // чуть выше поверхности
+  const GLOBE_RADIUS = 1.002; // Практически лежат на поверхности
 
   for (let i = 0; i < count; i++) {
     const trace = traces[i];
@@ -77,7 +81,8 @@ export function createTraces(scene, traces) {
     colors[i * 3 + 1] = tempColor.g;
     colors[i * 3 + 2] = tempColor.b;
 
-    sizes[i]     = 0.5 + Math.random() * 0.4;
+    // Базовый размер
+    sizes[i]     = 0.4 + Math.random() * 0.3;
     opacities[i] = 1.0;
     phases[i]    = Math.random();
 
@@ -96,7 +101,10 @@ export function createTraces(scene, traces) {
     fragmentShader: traceFragmentShader,
     transparent: true,
     depthWrite: false,
-    blending: THREE.NormalBlending,
+    // AdditiveBlending снова включен! 
+    // Поскольку шейдер теперь имеет резкое узкое ядро и мягкий спад, 
+    // сложение цветов даст красивый эффект "сгустка энергии", а не белый квадрат.
+    blending: THREE.AdditiveBlending,
     uniforms: {
       uTime:       { value: 0 },
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
@@ -108,26 +116,18 @@ export function createTraces(scene, traces) {
 
   // ── API ──
 
-  let activeFilter = null;
   let filterAnimation = null;
 
-  /**
-   * Фильтрация по категории (null = все)
-   */
   function setFilter(categoryId) {
-    activeFilter = categoryId;
-
-    // Плавная анимация opacity
     const targetOpacities = new Float32Array(count);
     for (let i = 0; i < count; i++) {
       if (!categoryId || categoryIndices[i] === categoryId) {
         targetOpacities[i] = 1.0;
       } else {
-        targetOpacities[i] = 0.04;
+        targetOpacities[i] = 0.02; // почти невидимы
       }
     }
 
-    // Запускаем анимацию
     if (filterAnimation) cancelAnimationFrame(filterAnimation);
 
     const currentOpacities = geometry.attributes.aOpacity.array;
@@ -138,7 +138,7 @@ export function createTraces(scene, traces) {
     function animateFilter() {
       const elapsed = performance.now() - startTime;
       const t = Math.min(elapsed / duration, 1);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const eased = 1 - Math.pow(1 - t, 3);
 
       for (let i = 0; i < count; i++) {
         currentOpacities[i] = startOpacities[i] + (targetOpacities[i] - startOpacities[i]) * eased;
@@ -152,24 +152,17 @@ export function createTraces(scene, traces) {
     animateFilter();
   }
 
-  /**
-   * Добавить новый след с эффектом вспышки
-   */
   function addTrace(trace) {
     traces.push(trace);
-    // Для MVP — визуальная вспышка без реального добавления в BufferGeometry
-    // (BufferGeometry имеет фиксированный размер, расширение будет в полной версии)
     flashAt(trace.lat, trace.lng, trace.color);
   }
 
-  /**
-   * Вспышка в точке
-   */
   function flashAt(lat, lng, color) {
-    const pos = latLngToVector3(lat, lng, 1.02);
-    const flashGeo = new THREE.SphereGeometry(0.008, 12, 12);
+    const pos = latLngToVector3(lat, lng, 1.005);
+    // Крошечная вспышка-ядро
+    const flashGeo = new THREE.SphereGeometry(0.005, 12, 12);
     const flashMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color),
+      color: new THREE.Color(color).multiplyScalar(2.0), // HDR boost
       transparent: true,
       opacity: 1,
     });
@@ -180,14 +173,14 @@ export function createTraces(scene, traces) {
     const startTime = performance.now();
     function animateFlash() {
       const elapsed = performance.now() - startTime;
-      const t = elapsed / 1500;
+      const t = elapsed / 1000;
       if (t >= 1) {
         scene.remove(flash);
         flashGeo.dispose();
         flashMat.dispose();
         return;
       }
-      const scale = 1 + t * 4;
+      const scale = 1 + t * 5;
       flash.scale.setScalar(scale);
       flashMat.opacity = 1 - t;
       requestAnimationFrame(animateFlash);
@@ -195,16 +188,10 @@ export function createTraces(scene, traces) {
     animateFlash();
   }
 
-  /**
-   * Обновление времени (вызывается каждый кадр)
-   */
   function update(time) {
     material.uniforms.uTime.value = time;
   }
 
-  /**
-   * Найти ближайшие следы к lat/lng
-   */
   function getTracesNear(lat, lng, radiusDeg = 15) {
     return traces.filter(t => {
       const dlat = t.lat - lat;
@@ -213,11 +200,5 @@ export function createTraces(scene, traces) {
     });
   }
 
-  return {
-    points,
-    setFilter,
-    addTrace,
-    update,
-    getTracesNear,
-  };
+  return { points, setFilter, addTrace, update, getTracesNear };
 }
