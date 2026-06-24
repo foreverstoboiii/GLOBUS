@@ -2,16 +2,21 @@
 // UI: overlay, фильтры, панель региона
 // ─────────────────────────────────────────────
 import { CATEGORIES } from './data.js';
+import gsap from 'gsap';
+import { playClick, playHover, unlockAudio } from './audio.js';
 
-/**
- * Создание всего UI
- */
-export function createUI({ onSubmitTrace, onFilter, onGlobeClick }) {
+export function createUI({ onSubmitTrace, onFilter, onGlobeClick, onClosePanel }) {
   createOverlay(onSubmitTrace);
   createFilters(onFilter);
-  createRegionPanel();
+  createRegionPanel(onClosePanel);
   createCounter();
   setupGlobeClickHandler(onGlobeClick);
+
+  // Начальная анимация появления оверлея
+  gsap.fromTo('#overlay .overlay-content', 
+    { opacity: 0, y: 30, scale: 0.95 }, 
+    { opacity: 1, y: 0, scale: 1, duration: 1.2, ease: "power3.out", delay: 0.5 }
+  );
 }
 
 // ── Overlay (главный вопрос) ──────────────────
@@ -50,7 +55,6 @@ function createOverlay(onSubmit) {
   `;
   document.body.appendChild(overlay);
 
-  // ── Логика ──
   let selectedCategory = null;
   const chips = overlay.querySelectorAll('.chip');
   const textarea = overlay.querySelector('#custom-thought');
@@ -58,10 +62,12 @@ function createOverlay(onSubmit) {
   const submitBtn = overlay.querySelector('#submit-btn');
 
   chips.forEach(chip => {
+    chip.addEventListener('mouseenter', () => playHover());
     chip.addEventListener('click', () => {
+      unlockAudio();
+      playClick();
       const catId = chip.dataset.category;
       if (selectedCategory === catId) {
-        // Деселект
         chip.classList.remove('active');
         selectedCategory = null;
       } else {
@@ -84,13 +90,14 @@ function createOverlay(onSubmit) {
   }
 
   submitBtn.addEventListener('click', () => {
+    unlockAudio();
+    playClick();
     const text = textarea.value.trim();
     const category = selectedCategory || 'search';
     onSubmit({ text, category });
     hideOverlay();
   });
 
-  // Enter для отправки (shift+enter — новая строка)
   textarea.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -101,21 +108,44 @@ function createOverlay(onSubmit) {
 
 function hideOverlay() {
   const overlay = document.getElementById('overlay');
-  overlay.classList.add('hidden');
-  // Показать фильтры
-  setTimeout(() => {
-    document.getElementById('filter-bar').classList.add('visible');
-    showCounter();
-  }, 600);
+  
+  gsap.to('#overlay .overlay-content', {
+    opacity: 0,
+    y: -30,
+    scale: 0.95,
+    duration: 0.8,
+    ease: "power3.in",
+    onComplete: () => {
+      overlay.style.display = 'none';
+      
+      // Показываем фильтры
+      const filterBar = document.getElementById('filter-bar');
+      filterBar.style.display = 'flex';
+      gsap.fromTo(filterBar, 
+        { opacity: 0, y: 20 }, 
+        { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }
+      );
+      
+      showCounter();
+    }
+  });
 }
 
-/**
- * Показать overlay снова
- */
 export function showOverlay() {
   const overlay = document.getElementById('overlay');
-  overlay.classList.remove('hidden');
-  document.getElementById('filter-bar').classList.remove('visible');
+  const filterBar = document.getElementById('filter-bar');
+
+  gsap.to(filterBar, {
+    opacity: 0, y: 20, duration: 0.5, ease: "power2.in", onComplete: () => {
+      filterBar.style.display = 'none';
+    }
+  });
+
+  overlay.style.display = 'flex';
+  gsap.fromTo('#overlay .overlay-content', 
+    { opacity: 0, y: 30, scale: 0.95 }, 
+    { opacity: 1, y: 0, scale: 1, duration: 0.8, ease: "power3.out" }
+  );
 }
 
 // ── Фильтры ──────────────────────────────────
@@ -123,6 +153,7 @@ export function showOverlay() {
 function createFilters(onFilter) {
   const bar = document.createElement('div');
   bar.id = 'filter-bar';
+  bar.style.display = 'none'; // Скрыты до отправки первой мысли
   bar.innerHTML = `
     <button class="filter-chip active" data-filter="all">
       <span class="filter-dot" style="background: #fff"></span>
@@ -139,7 +170,9 @@ function createFilters(onFilter) {
 
   const chips = bar.querySelectorAll('.filter-chip');
   chips.forEach(chip => {
+    chip.addEventListener('mouseenter', () => playHover());
     chip.addEventListener('click', () => {
+      playClick();
       chips.forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       const filter = chip.dataset.filter === 'all' ? null : chip.dataset.filter;
@@ -150,7 +183,7 @@ function createFilters(onFilter) {
 
 // ── Панель региона ───────────────────────────
 
-function createRegionPanel() {
+function createRegionPanel(onClose) {
   const panel = document.createElement('div');
   panel.id = 'region-panel';
   panel.innerHTML = `
@@ -163,13 +196,11 @@ function createRegionPanel() {
   document.body.appendChild(panel);
 
   document.getElementById('panel-close').addEventListener('click', () => {
-    panel.classList.remove('visible');
+    hideRegionPanel();
+    if (onClose) onClose();
   });
 }
 
-/**
- * Показать панель региона с данными
- */
 export function showRegionPanel(traces) {
   if (!traces.length) return;
 
@@ -178,7 +209,6 @@ export function showRegionPanel(traces) {
   const stats = document.getElementById('panel-stats');
   const tracesList = document.getElementById('panel-traces');
 
-  // Определяем страну (самая частая)
   const countryCounts = {};
   traces.forEach(t => {
     countryCounts[t.country] = (countryCounts[t.country] || 0) + 1;
@@ -188,7 +218,6 @@ export function showRegionPanel(traces) {
 
   title.textContent = topCountry;
 
-  // Статистика по категориям
   const catCounts = {};
   traces.forEach(t => {
     catCounts[t.categoryLabel] = (catCounts[t.categoryLabel] || 0) + 1;
@@ -210,13 +239,12 @@ export function showRegionPanel(traces) {
         </span>
         <span class="stat-value">${pct}%</span>
         <div class="stat-bar">
-          <div class="stat-bar-fill" style="width: ${pct}%; background: ${color}"></div>
+          <div class="stat-bar-fill" style="width: 0%; background: ${color}" data-width="${pct}%"></div>
         </div>
       </div>
     `;
   }).join('');
 
-  // Показать 3 случайных следа
   const sample = traces
     .sort(() => Math.random() - 0.5)
     .slice(0, 3);
@@ -229,6 +257,28 @@ export function showRegionPanel(traces) {
   `).join('');
 
   panel.classList.add('visible');
+  gsap.fromTo(panel, 
+    { x: '100%', opacity: 0 }, 
+    { x: '0%', opacity: 1, duration: 0.6, ease: "power3.out" }
+  );
+
+  // Анимация прогресс-баров
+  setTimeout(() => {
+    const fills = panel.querySelectorAll('.stat-bar-fill');
+    fills.forEach(fill => {
+      gsap.to(fill, { width: fill.dataset.width, duration: 1, ease: "power2.out", delay: 0.2 });
+    });
+  }, 100);
+}
+
+export function hideRegionPanel() {
+  const panel = document.getElementById('region-panel');
+  if (panel.classList.contains('visible')) {
+    gsap.to(panel, {
+      x: '100%', opacity: 0, duration: 0.5, ease: "power3.in",
+      onComplete: () => panel.classList.remove('visible')
+    });
+  }
 }
 
 // ── Счётчик ──────────────────────────────────
@@ -236,6 +286,7 @@ export function showRegionPanel(traces) {
 function createCounter() {
   const counter = document.createElement('div');
   counter.id = 'trace-counter';
+  counter.style.display = 'none';
   counter.innerHTML = `
     <div class="counter-content">
       <span class="counter-number" id="counter-number">0</span>
@@ -248,27 +299,30 @@ function createCounter() {
 function showCounter() {
   const counter = document.getElementById('trace-counter');
   const numberEl = document.getElementById('counter-number');
-  counter.classList.add('visible');
+  
+  counter.style.display = 'block';
+  gsap.fromTo(counter, 
+    { opacity: 0, y: 20 }, 
+    { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }
+  );
 
-  // Анимация числа
   const target = 800 + Math.floor(Math.random() * 1500);
-  const duration = 2000;
-  const start = performance.now();
+  const proxy = { val: 0 };
+  
+  gsap.to(proxy, {
+    val: target,
+    duration: 2.5,
+    ease: "power3.out",
+    onUpdate: () => {
+      numberEl.textContent = Math.floor(proxy.val).toLocaleString('ru-RU');
+    }
+  });
 
-  function animate() {
-    const elapsed = performance.now() - start;
-    const t = Math.min(elapsed / duration, 1);
-    const eased = 1 - Math.pow(1 - t, 3);
-    const current = Math.floor(target * eased);
-    numberEl.textContent = current.toLocaleString('ru-RU');
-    if (t < 1) requestAnimationFrame(animate);
-  }
-  animate();
-
-  // Скрыть через 5 секунд
-  setTimeout(() => {
-    counter.classList.remove('visible');
-  }, 6000);
+  // Скрыть через 6 секунд
+  gsap.to(counter, {
+    opacity: 0, y: -20, duration: 0.8, delay: 6, ease: "power2.in",
+    onComplete: () => counter.style.display = 'none'
+  });
 }
 
 // ── Globe click handler ──────────────────────
@@ -277,6 +331,10 @@ function setupGlobeClickHandler(onGlobeClick) {
   let pointerDownPos = null;
 
   document.addEventListener('pointerdown', (e) => {
+    // Не кликаем сквозь UI
+    if (e.target.closest('#region-panel') || e.target.closest('#overlay') || e.target.closest('#filter-bar')) {
+      return;
+    }
     pointerDownPos = { x: e.clientX, y: e.clientY };
   });
 
@@ -286,7 +344,6 @@ function setupGlobeClickHandler(onGlobeClick) {
     const dy = e.clientY - pointerDownPos.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // Только если это клик, а не drag
     if (dist < 5) {
       onGlobeClick(e);
     }
